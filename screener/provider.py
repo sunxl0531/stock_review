@@ -82,6 +82,10 @@ def parse_tencent_daily_quotes(text):
                    ("open",5),("volume",6),("high",33),("low",34))}
         if any(v is None for v in values.values()):
             continue
+        if values["volume"] <= 0:
+            # Suspended quotes may retain a close but report zero OHLC.
+            # They cannot form a daily candle; let the per-stock history path decide.
+            continue
         rows.append({"code":code(f[2]), "date":stamp.date().isoformat(), **values})
     return rows
 

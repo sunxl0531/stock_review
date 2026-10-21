@@ -9,7 +9,7 @@ from screener.store import Store
 from screener.service import Service
 from screener.demo import seed
 
-st.set_page_config(page_title="A股筛选工作台", page_icon="📈", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="工作台", page_icon="📈", layout="wide", initial_sidebar_state="expanded")
 st.markdown("""<style>
 .block-container{padding-top:2rem;max-width:1600px} [data-testid=stMetric]{background:#f0f4f8;padding:16px;border-radius:10px}
 [data-testid=stMetricValue]{font-size:1.8rem} h1{letter-spacing:-1px} .stCaption{color:#687385}
@@ -26,7 +26,7 @@ store = Store(data_dir / ("demo.db" if demo else "market.db"))
 if demo:
     seed(store)
 svc = Service(store)
-st.title("A股分析工作台")
+st.title("工作台")
 if st.session_state.get("requested_page"):
     st.session_state.workspace_page = st.session_state.pop("requested_page")
 page = st.radio("工作区", ["今日概览", "股票筛选", "每日复盘", "自选跟踪"], horizontal=True, key="workspace_page", label_visibility="collapsed")

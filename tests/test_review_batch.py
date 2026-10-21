@@ -25,6 +25,21 @@ def test_tencent_batch_quote_contains_day_ohlc_and_previous_close():
     assert rows[0]["previous_close"] == 11.65
     assert rows[0]["high"] == 11.68
 
+
+def test_tencent_batch_skips_zero_volume_suspended_quote():
+    normal = [""]*88
+    halted = [""]*88
+    for fields, values in ((normal,{2:"600001",3:"11.44",4:"11.65",5:"11.62",6:"1245097",
+                                  30:"20261021161500",33:"11.68",34:"11.38"}),
+                           (halted,{2:"601326",3:"3.57",4:"3.57",5:"0",6:"0",
+                                    30:"20261021161500",33:"0",34:"0"})):
+        for index,value in values.items():
+            fields[index] = value
+    text = 'v_sh600001="'+'~'.join(normal)+'";v_sh601326="'+'~'.join(halted)+'";'
+    rows = parse_tencent_daily_quotes(text)
+    validate("review_quotes_tencent", {"rows":rows}, {})
+    assert [r["code"] for r in rows] == ["600001"]
+
 class BatchService:
     def __init__(self):
         self.calls = []
