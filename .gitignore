@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+.pytest_cache/
+data/
+*.log
+dist/
+.portable-check/
+.streamlit/secrets.toml
+.env
+.env.*
+*.db
+*.sqlite
+*.sqlite3
+*.zip
