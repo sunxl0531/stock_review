@@ -44,6 +44,24 @@ class Service:
             self.store.put("quotes", data | {"fetched_at": now()})
             return len(rows)
 
+    def refresh_watchlist_quotes(self, codes):
+        from .history import history_symbol
+        selected = sorted(set(codes))
+        if not selected:
+            return 0
+        with self.store.task_lock():
+            boards = {r["code"]:r.get("board") for r in self.directory()}
+            symbols = [history_symbol(stock_code, boards.get(stock_code)) for stock_code in selected]
+            data = self.request("quotes_tencent", symbols=symbols)
+            if any(r["code"] not in selected for r in data["rows"]):
+                raise ValueError("自选行情返回了未请求的股票，旧缓存已保留")
+            stamp = now()
+            old = {r["code"]:r for r in self.store.get("watch_quotes", {}).get("rows", []) if r["code"] in selected}
+            old.update({r["code"]:r | {"fetched_at":stamp} for r in data["rows"]})
+            self.store.put("watch_quotes", {"rows":[old[c] for c in sorted(old)],
+                                            "source":data.get("source", "腾讯公开行情"), "fetched_at":stamp})
+            return len(data["rows"])
+
     def as_of(self):
         snapshot = self.store.get("quotes", {})
         dates = [r["quote_date"] for r in snapshot.get("rows", []) if r.get("quote_date")]
@@ -59,13 +77,13 @@ class Service:
             self.store.put("suspensions", data | {"fetched_at": now()})
             return len(data.get("records", []))
 
-    def fetch_history(self, stock_code, source="tencent"):
+    def fetch_history(self, stock_code, source="tencent", target_date=None):
         from .history_cache import HistoryCache
         if source not in ("tencent", "eastmoney"):
             raise ValueError("未知历史数据来源")
         with self.store.task_lock():
             board = next((r.get("board") for r in self.directory() if r["code"] == stock_code), None)
-            data = HistoryCache(self.store, self.request).refresh(stock_code, board, self.as_of(), source,
+            data = HistoryCache(self.store, self.request).refresh(stock_code, board, target_date or self.as_of(), source,
                                                                 allow_closed_cache=False)
             return len(data.get("bars", []))
 

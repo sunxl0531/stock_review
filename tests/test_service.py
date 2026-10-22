@@ -36,6 +36,47 @@ def test_watchlist_persists(tmp_path):
     s.set_watchlist(["000001", "000001", "920001"])
     assert Store(tmp_path / "test.db").watchlist() == ["000001", "920001"]
 
+
+def test_watchlist_quote_refresh_only_requests_selected_and_preserves_market_snapshot(tmp_path):
+    store = Store(tmp_path / "market.db")
+    old = {"rows":[{"code":"600001","price":8}],"fetched_at":"old"}
+    store.put("quotes", old)
+    class WatchProvider:
+        def __init__(self):
+            self.calls = []
+        def call(self, operation, **kwargs):
+            self.calls.append((operation, kwargs))
+            return {"rows":[{"code":"600001","name":"甲","price":10,"change_pct":2,
+                              "volume_ratio":1.2,"amount":10000000,"quote_date":"2026-10-22",
+                              "quote_time":"2026-10-22 10:00:00"}],"source":"腾讯公开行情"}
+    provider = WatchProvider()
+    count = Service(store, provider).refresh_watchlist_quotes(["600001"])
+    assert count == 1
+    assert provider.calls == [("quotes_tencent", {"symbols":["sh600001"]})]
+    assert store.get("quotes") == old
+    assert store.get("watch_quotes")["rows"][0]["price"] == 10
+
+
+def test_watchlist_quote_failure_keeps_old_watch_snapshot(tmp_path):
+    store = Store(tmp_path / "market.db")
+    old = {"rows":[{"code":"600001","price":8}],"fetched_at":"old"}
+    store.put("watch_quotes", old)
+    with pytest.raises(RuntimeError):
+        Service(store, Provider(error="网络失败")).refresh_watchlist_quotes(["600001"])
+    assert store.get("watch_quotes") == old
+
+
+def test_explicit_history_date_for_watchlist(tmp_path, monkeypatch):
+    from screener.history_cache import HistoryCache
+    store = Store(tmp_path / "market.db")
+    seen = []
+    def fake_refresh(self, stock_code, board, target, source, allow_closed_cache=True):
+        seen.append((stock_code, target, source, allow_closed_cache))
+        return {"bars":[{}]}
+    monkeypatch.setattr(HistoryCache, "refresh", fake_refresh)
+    Service(store).fetch_history("600001", target_date="2026-10-22")
+    assert seen == [("600001","2026-10-22","tencent",False)]
+
 def test_busy_guard_releases_after_failure(tmp_path):
     s = Store(tmp_path / "test.db")
     with s.task_lock():
