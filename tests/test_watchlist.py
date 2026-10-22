@@ -1,5 +1,5 @@
 import pytest
-from screener.watchlist_ui import build_watch_rows
+from screener.watchlist_ui import build_watch_rows, selected_watch_code
 from pathlib import Path
 from streamlit.testing.v1 import AppTest
 from screener.store import Store
@@ -24,6 +24,14 @@ def test_watchlist_rows_show_separate_refreshed_quotes():
     assert rows[0]["最新价"] == 12.3
     assert rows[0]["涨跌幅 %"] == 1.2
     assert rows[0]["行情时间"] == "2026-10-22 10:01:00"
+
+
+def test_clicking_watchlist_row_switches_detail_without_overriding_later_manual_choice():
+    rows = [{"代码":"002050"}, {"代码":"300058"}]
+    assert selected_watch_code(rows, [1], None) == ("300058", "300058")
+    assert selected_watch_code(rows, [1], "300058") == (None, "300058")
+    assert selected_watch_code(rows, [0], "300058") == ("002050", "002050")
+    assert selected_watch_code(rows, [4], "300058") == (None, None)
 
 
 def test_watchlist_indicators_use_latest_local_daily_history_not_old_review():

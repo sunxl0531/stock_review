@@ -58,6 +58,13 @@ def build_watch_rows(codes, directory, results, target, changes=None, quotes=Non
     return rows
 
 
+def selected_watch_code(rows, selected_indices, previous_code):
+    """Return a newly clicked code and the selection to remember across reruns."""
+    index = selected_indices[0] if selected_indices else None
+    code = rows[index]["代码"] if isinstance(index, int) and 0 <= index < len(rows) else None
+    return (code if code != previous_code else None), code
+
+
 def render_watchlist(store, demo):
     st.subheader("自选股跟踪")
     st.caption("打开本页只读本地数据；点击刷新按钮后才请求自选股行情和日K。")
@@ -121,7 +128,14 @@ def render_watchlist(store, demo):
     histories = {code:store.get("history:"+code) for code in codes}
     rows = build_watch_rows(codes, Service(store).directory(), results, target, changes,
                             quotes=watch_snapshot.get("rows", []), histories=histories)
-    st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+    st.caption("点击表格行，下方切换到该股K线。")
+    event = st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True,
+                         on_select="rerun", selection_mode="single-row", key="watch_table")
+    selected, remembered = selected_watch_code(rows, list(event.selection.rows),
+                                               st.session_state.get("watch_table_selection"))
+    st.session_state.watch_table_selection = remembered
+    if selected:
+        st.session_state.watch_detail = selected
     choice = st.selectbox("查看自选股票", codes, format_func=lambda c:c+" · "+next(
         (r["名称"] for r in rows if r["代码"] == c), ""), key="watch_detail")
     left, right = st.columns(2)
