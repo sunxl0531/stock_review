@@ -31,10 +31,15 @@ def normalize_directory(records, board):
     result = []
     for r in records:
         shenzhen = board == "深圳"
+        industry = r.get("所属行业")
+        industry = industry.strip() if isinstance(industry, str) else None
+        if industry in ("", "-", "nan"):
+            industry = None
         result.append({"code": code(r["A股代码" if shenzhen else "证券代码"]),
                        "name": r.get("A股简称" if shenzhen else "证券简称"),
                        "listed": day(r.get("A股上市日期" if shenzhen else "上市日期")),
-                       "board": ({"主板":"深市主板", "创业板":"创业板"}.get(r.get("板块")) if shenzhen else board)})
+                       "board": ({"主板":"深市主板", "创业板":"创业板"}.get(r.get("板块")) if shenzhen else board),
+                       "industry":industry})
     return result
 
 def normalize_history(adjusted, raw):
@@ -44,9 +49,12 @@ def normalize_history(adjusted, raw):
     comparable = False
     basis = bars[-1]["date"] if bars else None
     if bars and raw:
-        last = raw[-1]
+        last = next((r for r in reversed(raw) if day(r.get("日期")) == basis), None)
+    else:
+        last = None
+    if last:
         close = number(last.get("收盘"))
-        comparable = (day(last.get("日期")) == basis and close is not None and bars[-1]["close"] is not None
+        comparable = (close is not None and bars[-1]["close"] is not None
                       and abs(close - bars[-1]["close"]) <= 0.011)
     return {"bars": bars, "basis_date": basis, "comparable": comparable, "adjustment": "qfq"}
 
@@ -86,7 +94,8 @@ def parse_tencent_daily_quotes(text):
             # Suspended quotes may retain a close but report zero OHLC.
             # They cannot form a daily candle; let the per-stock history path decide.
             continue
-        rows.append({"code":code(f[2]), "date":stamp.date().isoformat(), **values})
+        rows.append({"code":code(f[2]), "date":stamp.date().isoformat(),
+                     "quote_time":stamp.isoformat(sep=" "), **values})
     return rows
 
 class Provider:

@@ -63,6 +63,8 @@ class FakeService:
             return {"days":CAL}
         if operation == "directory":
             return {"rows":[dict(code="600001", name="测试", board="沪市主板", listed=CAL[0])]}
+        if operation == "review_quotes_tencent":
+            return {"rows":[]}
         return history([20]*29+[30])
 
 def config():

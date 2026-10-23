@@ -1,7 +1,7 @@
 """External requests only. This process can safely be terminated on timeout."""
 import json
 import sys
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from .provider import normalize_quotes, normalize_directory, normalize_history, parse_tencent, parse_tencent_daily_quotes
 
 def install_transport_guard():
@@ -19,6 +19,28 @@ def install_transport_guard():
         response.raise_for_status()
         return response
     requests.sessions.Session.send = bounded_send
+
+def shanghai_directory(board):
+    """Read the SSE stock list with its industry field."""
+    import requests
+    params = {"STOCK_TYPE":"8" if board == "科创板" else "1",
+              "REG_PROVINCE":"", "CSRC_CODE":"", "STOCK_CODE":"",
+              "sqlId":"COMMON_SSE_CP_GPJCTPZ_GPLB_GP_L", "COMPANY_STATUS":"2,4,5,7,8",
+              "type":"inParams", "isPagination":"true", "pageHelp.cacheSize":"1",
+              "pageHelp.beginPage":"1", "pageHelp.pageSize":"10000",
+              "pageHelp.pageNo":"1", "pageHelp.endPage":"1"}
+    response = requests.get("https://query.sse.com.cn/sseQuery/commonQuery.do", params=params,
+        headers={"Referer":"https://www.sse.com.cn/assortment/stock/list/share/",
+                 "User-Agent":"Mozilla/5.0"}, timeout=(8,15))
+    response.raise_for_status()
+    records = [{"证券代码":r.get("A_STOCK_CODE"), "证券简称":r.get("SEC_NAME_CN"),
+                "上市日期":(datetime.strptime(r["LIST_DATE"], "%Y%m%d").date().isoformat()
+                        if len(r.get("LIST_DATE") or "") == 8 and r["LIST_DATE"].isdigit()
+                        else r.get("LIST_DATE")),
+                "所属行业":r.get("CSRC_CODE_DESC")}
+               for r in response.json()["result"]]
+    return normalize_directory(records, board)
+
 
 def execute(operation, **kwargs):
     import requests
@@ -54,15 +76,15 @@ def execute(operation, **kwargs):
         if not rows:
             raise ValueError("腾讯批量行情为空，复盘已暂停")
         return {"rows": rows, "source":"腾讯批量行情", "http_requests":1}
+    if operation == "directory" and kwargs["board"] in ("沪市主板", "科创板"):
+        return {"rows":shanghai_directory(kwargs["board"]), "http_requests":1}
     import akshare as ak
     if operation == "quotes_eastmoney":
         return {"rows": normalize_quotes(ak.stock_zh_a_spot_em().to_dict("records")),
                 "source": "AKShare / 东方财富", "http_requests": None}
     if operation == "directory":
         board = kwargs["board"]
-        if board in ("沪市主板", "科创板"):
-            frame = ak.stock_info_sh_name_code(symbol="主板A股" if board == "沪市主板" else "科创板")
-        elif board == "深圳":
+        if board == "深圳":
             frame = ak.stock_info_sz_name_code(symbol="A股列表")
         else:
             frame = ak.stock_info_bj_name_code()

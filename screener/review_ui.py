@@ -12,18 +12,19 @@ from .review_metrics import review_metrics
 from .store import now
 
 STATUS = {"ready":"待开始", "running":"扫描中", "paused":"已暂停", "done":"扫描完成", "partial":"存在请求失败"}
-COLUMNS = {"code":"代码", "name":"名称", "above_days":"连续站上天数", "break_date":"突破日期",
+COLUMNS = {"code":"代码", "name":"名称", "industry":"行业板块",
+           "above_days":"连续站上天数", "break_date":"突破日期",
            "close":"日K收盘价", "snakea":"SNAKEA", "snakea_direction":"SNAKEA方向",
            "distance_pct":"距SNAKEA %", "snakea_change_pct":"SNAKEA日变化 %",
            "stop_lower":"停损下限", "stop_color":"停损显示",
-           "reason":"入选原因", "data_fetched_at":"行情获取时间"}
+           "reason":"入选原因", "verification":"数据依据", "data_fetched_at":"行情获取时间"}
 
 
 def render_review(store, demo):
     st.subheader("每日复盘 · SNAKEA")
     st.write("站上 1～2 天直接入选；连续站上超过 2 天，仅在 SNAKEA 上行时入选。")
     st.caption("站上=日K收盘价严格大于同日SNAKEA；上行=最新一根SNAKEA高于前一根。按沪深主板、创业板、科创板、北交所分组。")
-    st.info("首次建立本地历史库需要逐股获取日K；之后可一次读取多只股票的当日行情，结合本地历史快速初筛。接近条件的股票再逐只核对前复权日K。默认2路并发，支持停止及继续。")
+    st.info("开始复盘会重新获取交易日历、股票目录和当天批量行情，再计算结果；腾讯历史日K滞后时，仅在收盘行情与前一日K线核对一致后补算，并标明数据依据。默认2路并发，支持停止及继续。")
     st.caption(f"本地数据库：{store.path}。迁移电脑时保留整个 data 文件夹即可。")
     if demo:
         st.caption("演示模式不发起复盘扫描。关闭左侧演示模式后可开始真实复盘。")
@@ -89,7 +90,7 @@ def review_panel(store, demo):
                                  [counts[k] for k in ("match","no_match","excluded","unknown","error")]):
         col.metric(label, value)
     cache_counts = Counter(r.get("cache_mode") for r in results)
-    st.caption(f"历史读取：批量初筛 {cache_counts['batch']} · 本地复用 {cache_counts['local']} · 增量更新 {cache_counts['incremental']} · 首次/换源获取 {cache_counts['full']} · 价格基准变化后重取 {cache_counts['rebase']}")
+    st.caption(f"历史读取：批量初筛 {cache_counts['batch']} · 收盘行情补日K {cache_counts['spot_close']} · 本地复用 {cache_counts['local']} · 增量更新 {cache_counts['incremental']} · 首次/换源获取 {cache_counts['full']} · 价格基准变化后重取 {cache_counts['rebase']}")
     if cache_counts["batch"]:
         st.warning(f"{cache_counts['batch']} 只未入选股票由批量当日行情和本地历史初筛，未逐只校验当天前复权价格；除权等情况可能使筛选结果变化。需要严格核验时，重新开始复盘并关闭“快速复盘”。")
     st.caption(f"开始：{run['created_at']} · 最近更新：{run['updated_at']}。每只股票独立请求，非同一时刻快照；收盘前日K可能变化。")
@@ -136,6 +137,9 @@ def review_panel(store, demo):
     if not matches:
         st.info("当前视图暂无股票。")
     selected_code = st.session_state.get("review_selected:"+run_id)
+    industry_by_code = {row["code"]:row.get("industry") for source_board in
+        ("沪市主板", "科创板", "深圳", "北交所")
+        for row in store.get("directory:"+source_board, {}).get("rows", [])}
     for board in run["config"]["boards"]:
         group = sorted([r for r in matches if r.get("board") == board],
                        key=lambda r:(r.get("above_days", 0),r["code"]))
@@ -148,6 +152,8 @@ def review_panel(store, demo):
             for r in group:
                 source_row = (repo.result(run_id, r["code"]) or (repo.result(prior["id"], r["code"]) if prior else None)) if r.get("outcome") == "match" and r.get("stop_lower") is None else r
                 displayed.append(r | review_metrics(source_row or r) | {
+                    "industry":r.get("industry") or industry_by_code.get(r["code"]) or "未提供",
+                    "verification":r.get("verification") or "历史日K",
                     "above_days":f"≥{r.get('above_days','')}" if r.get("above_days_at_least") else str(r.get("above_days", "")),
                     "break_date":r.get("break_date") or "早于可确认区间"})
             event = st.dataframe(pd.DataFrame(displayed).reindex(columns=list(COLUMNS)).rename(columns=COLUMNS),

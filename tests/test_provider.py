@@ -8,10 +8,26 @@ def test_quote_units_and_missing_data():
     assert rows[0]["quote_date"] is None
 
 def test_bj_new_codes_and_sz_directory():
-    rows = normalize_directory([{"证券代码": "920001", "证券简称": "样本", "上市日期": "2020-01-01"}], "北交所")
+    rows = normalize_directory([{"证券代码": "920001", "证券简称": "样本", "上市日期": "2020-01-01", "所属行业":"软件服务"}], "北交所")
     assert rows[0]["board"] == "北交所"
-    rows = normalize_directory([{"A股代码": "000001", "A股简称": "样本", "A股上市日期": "1991-04-03", "板块": "主板"}], "深圳")
+    assert rows[0]["industry"] == "软件服务"
+    rows = normalize_directory([{"A股代码": "000001", "A股简称": "样本", "A股上市日期": "1991-04-03", "板块": "主板", "所属行业":"银行"}], "深圳")
     assert rows[0]["board"] == "深市主板"
+    assert rows[0]["industry"] == "银行"
+
+
+def test_shanghai_directory_keeps_exchange_industry(monkeypatch):
+    from screener.worker import shanghai_directory
+    import requests
+    class Response:
+        def raise_for_status(self): pass
+        def json(self):
+            return {"result":[{"A_STOCK_CODE":"600000", "SEC_NAME_CN":"浦发银行",
+                "LIST_DATE":"19991110", "CSRC_CODE_DESC":"银行业"}]}
+    monkeypatch.setattr(requests, "get", lambda *a, **k: Response())
+    rows = shanghai_directory("沪市主板")
+    assert rows == [{"code":"600000", "name":"浦发银行", "listed":"1999-11-10",
+                     "board":"沪市主板", "industry":"银行业"}]
 
 def test_history_requires_matching_unadjusted_latest_bar():
     rows = [{"日期": "2026-10-19", "开盘": 10, "最高": 11, "最低": 9, "收盘": 10, "成交量": 100}]
@@ -19,6 +35,14 @@ def test_history_requires_matching_unadjusted_latest_bar():
     assert h["comparable"] and h["basis_date"] == "2026-10-19"
     bad = [rows[0] | {"收盘": 9}]
     assert not normalize_history(rows, bad)["comparable"]
+
+
+def test_history_compares_raw_bar_on_adjusted_basis_when_raw_feed_is_ahead():
+    adjusted = [{"日期":"2026-10-22", "开盘":9.66, "最高":9.73,
+                 "最低":9.55, "收盘":9.62, "成交量":100}]
+    raw = adjusted + [{"日期":"2026-10-23", "开盘":9.69, "最高":9.73,
+                       "最低":9.52, "收盘":9.53, "成交量":110}]
+    assert normalize_history(adjusted, raw)["comparable"]
 
 def test_tencent_timestamp_and_amount_units():
     f = [""] * 60

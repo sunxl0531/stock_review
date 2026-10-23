@@ -22,6 +22,7 @@ def test_tencent_batch_quote_contains_day_ohlc_and_previous_close():
     validate("review_quotes_tencent", {"rows":rows}, {})
     assert rows[0]["code"] == "600001"
     assert rows[0]["date"] == "2026-10-20"
+    assert rows[0]["quote_time"] == "2026-10-20 16:15:00"
     assert rows[0]["previous_close"] == 11.65
     assert rows[0]["high"] == 11.68
 
@@ -49,7 +50,7 @@ class BatchService:
             return {"days":DAYS}
         if operation == "directory":
             return {"rows":[{"code":f"60000{i}", "name":f"股票{i}",
-                             "board":"沪市主板", "listed":DAYS[0]} for i in (1,2,3)]}
+                             "board":"沪市主板", "listed":DAYS[0], "industry":"银行业"} for i in (1,2,3)]}
         if operation == "review_quotes_tencent":
             return {"rows":[{"code":f"60000{i}", "date":TARGET,"open":20,
                              "high":31, "low":14, "close":close,
@@ -74,7 +75,65 @@ def test_batch_mode_avoids_individual_history_for_local_nonmatch(tmp_path):
     assert by_code["600001"]["outcome"] == "no_match"
     assert by_code["600001"]["cache_mode"] == "batch"
     assert by_code["600002"]["outcome"] == "match"
+    assert by_code["600002"]["industry"] == "银行业"
     assert by_code["600003"]["outcome"] == "match"
     assert sum(op == "review_quotes_tencent" for op,_ in service.calls) == 1
     assert {args["code"] for op,args in service.calls if op == "history"} == {"600002","600003"}
     assert store.get("history:600001")["basis_date"] == DAYS[-2]
+
+
+def test_resume_rechecks_old_missing_day_result_with_new_batch_data(tmp_path):
+    store = Store(tmp_path/"market.db")
+    repo = ReviewRepository(store)
+    service = BatchService()
+    runner = ReviewRunner(repo, service, delay=0)
+    run = runner.create({"boards":["沪市主板"], "source":"tencent", "requested_date":TARGET,
+                         "exclude_st":False, "exclude_new":False, "workers":1, "fast_batch":True})
+    repo.put_result(run["id"], {"code":"600002", "outcome":"unknown",
+                                 "reason":"目标日的日K尚未返回"})
+    runner.run(run["id"])
+    result = repo.result(run["id"], "600002")
+    assert result["outcome"] == "match"
+    assert result["industry"] == "银行业"
+    assert any(op == "review_quotes_tencent" for op,_ in service.calls)
+
+
+def test_closed_spot_quote_completes_lagging_tencent_day_without_changing_history_cache(tmp_path):
+    class LaggingService(BatchService):
+        def request(self, operation, **kwargs):
+            if operation == "history":
+                return history(DAYS[-31:-1])
+            return super().request(operation, **kwargs)
+    store = Store(tmp_path/"market.db")
+    repo = ReviewRepository(store)
+    runner = ReviewRunner(repo, LaggingService(), delay=0)
+    stock = {"code":"600001", "name":"甲", "board":"沪市主板", "listed":DAYS[0]}
+    quote = {"date":TARGET, "quote_time":TARGET+" 15:10:00", "open":20,
+             "high":31, "low":19, "close":30, "previous_close":20, "volume":100}
+    cfg = {"source":"tencent", "fast_batch":False, "exclude_st":False, "exclude_new":False}
+    result = runner._scan_stock(stock, DAYS, TARGET, cfg, quote, TARGET+"T15:10:00+08:00")
+    assert result["outcome"] == "match"
+    assert result["cache_mode"] == "spot_close"
+    assert result["history"]["basis_date"] == TARGET
+    assert store.get("history:600001")["basis_date"] == DAYS[-2]
+    assert store.get("history:600001")["bars"][-1]["date"] == DAYS[-2]
+
+
+def test_lagging_history_stays_unknown_when_spot_is_intraday_or_previous_close_differs(tmp_path):
+    class LaggingService(BatchService):
+        def request(self, operation, **kwargs):
+            if operation == "history":
+                return history(DAYS[-31:-1])
+            return super().request(operation, **kwargs)
+    store = Store(tmp_path/"market.db")
+    runner = ReviewRunner(ReviewRepository(store), LaggingService(), delay=0)
+    stock = {"code":"600001", "name":"甲", "board":"沪市主板", "listed":DAYS[0]}
+    cfg = {"source":"tencent", "fast_batch":False, "exclude_st":False, "exclude_new":False}
+    quote = {"date":TARGET, "quote_time":TARGET+" 14:30:00", "open":20,
+             "high":31, "low":19, "close":30, "previous_close":20, "volume":100}
+    intraday = runner._scan_stock(stock, DAYS, TARGET, cfg, quote, TARGET+"T14:30:00+08:00")
+    assert intraday["outcome"] == "unknown"
+    quote["quote_time"] = TARGET+" 15:10:00"
+    quote["previous_close"] = 21
+    mismatch = runner._scan_stock(stock, DAYS, TARGET, cfg, quote, TARGET+"T15:10:00+08:00")
+    assert mismatch["outcome"] == "unknown"

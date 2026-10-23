@@ -15,6 +15,30 @@ from .store import now
 from .validation import validate
 
 
+def closed_quote_history(history, quote, calendar, target):
+    """Complete a lagging Tencent daily feed from a verified post-close spot bar."""
+    if not quote or not history or not history.get("comparable"):
+        return None
+    previous = [day for day in calendar if day < target]
+    if (not previous or history.get("basis_date") != previous[-1]
+            or quote.get("date") != target
+            or not (quote.get("quote_time") or "").startswith(target+" ")
+            or (quote.get("quote_time") or "")[11:19] < "15:05:00"
+            or quote.get("volume", 0) <= 0):
+        return None
+    last = history["bars"][-1]
+    if abs(last["close"]-quote["previous_close"]) > .011:
+        return None
+    bar = {key:quote[key] for key in ("date","open","high","low","close","volume")}
+    return history | {"bars":history["bars"]+[bar], "basis_date":target,
+                      "cache_mode":"spot_close", "verification":"腾讯收盘行情补足滞后的历史日K"}
+
+
+def needs_scan(result):
+    return result is None or result.get("outcome") == "error" or (
+        result.get("outcome") == "unknown" and result.get("reason") == "目标日的日K尚未返回")
+
+
 def review_signal(history, calendar, target):
     unknown = lambda reason: {"outcome":"unknown", "reason":reason}
     if not history or history.get("basis_date") != target:
@@ -162,6 +186,17 @@ class ReviewRunner:
         owner = uuid.uuid4().hex
         if not self.repo.claim(run_id, owner):
             raise RuntimeError("已有复盘任务进行中，请先停止或等待结束")
+        run = self.repo.get(run_id)
+        if run["status"] in ("paused", "running", "partial"):
+            # A resumed scan must re-fetch today's quotes and directory; otherwise
+            # morning quotes and old unknown verdicts survive a post-close retry.
+            run["stage"] = 0
+            self.repo.save(run)
+            context_key = "review:context:"+run_id
+            context = self.repo.store.get(context_key, {})
+            for key in ("batch_complete", "batch_index", "batch_quotes", "batch_fetched_at"):
+                context.pop(key, None)
+            self.repo.store.put(context_key, context)
         self.repo.store.put("review:stop:"+run_id, False)
         thread = threading.Thread(target=self.run, args=(run_id,owner), daemon=True)
         try:
@@ -225,11 +260,10 @@ class ReviewRunner:
         if not run["total"]:
             raise ValueError("所选市场目录为空，未开始扫描")
         previous = {r["code"]:r for r in self.repo.results(run["id"], include_history=False)}
-        if cfg.get("fast_batch") and cfg["source"] == "tencent" and not context.get("batch_complete"):
+        if cfg["source"] == "tencent" and not context.get("batch_complete"):
             cached = [stock for stock in context["stocks"] if self.exclusion(
                 stock, context["calendar"], run["target"], cfg) is None
-                and (stock["code"] not in previous or previous[stock["code"]]["outcome"] == "error")
-                and self.repo.store.get("history:"+stock["code"])]
+                and needs_scan(previous.get(stock["code"]))]
             context.setdefault("batch_quotes", {})
             for start in range(context.get("batch_index", 0), len(cached), 80):
                 if not self.checkpoint(run, owner):
@@ -246,8 +280,7 @@ class ReviewRunner:
                 self.repo.store.put(context_key, context)
             context["batch_complete"] = True
             self.repo.store.put(context_key, context)
-        pending = iter(stock for stock in context["stocks"] if stock["code"] not in previous
-                       or previous[stock["code"]]["outcome"] == "error")
+        pending = iter(stock for stock in context["stocks"] if needs_scan(previous.get(stock["code"])))
         workers = cfg.get("workers", 1)
         consecutive_errors = 0
         halted = False
@@ -347,8 +380,12 @@ class ReviewRunner:
                 history = HistoryCache(self.repo.store, self._request_history).refresh(
                     stock["code"], stock["board"], target, cfg["source"],
                     allow_closed_cache=not cfg.get("force_refresh", False))
+                if history["basis_date"] != target and cfg["source"] == "tencent":
+                    history = closed_quote_history(history, quote, calendar, target) or history
                 result = review_signal(history, calendar, target)
                 result.update(cache_mode=history["cache_mode"], data_fetched_at=history["fetched_at"])
+                if history.get("verification"):
+                    result["verification"] = history["verification"]
                 if result["outcome"] in ("match", "no_match"):
                     result.update(review_metrics(result | {"history":history}))
                 if result["outcome"] == "match":
