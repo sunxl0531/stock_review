@@ -13,12 +13,23 @@ st.set_page_config(page_title="工作台", page_icon="📈", layout="wide", init
 st.markdown("""<style>
 .block-container{padding-top:2rem;max-width:1600px} [data-testid=stMetric]{background:#f0f4f8;padding:16px;border-radius:10px}
 [data-testid=stMetricValue]{font-size:1.8rem} h1{letter-spacing:-1px} .stCaption{color:#687385}
+.st-key-workspace_page [role="radiogroup"]{gap:6px}
+.st-key-workspace_page label[data-baseweb="radio"]{padding:12px 16px;margin:0;border-radius:8px;width:100%;box-sizing:border-box;cursor:pointer}
+.st-key-workspace_page label[data-baseweb="radio"]:hover{background:#e8eef3}
+.st-key-workspace_page label[data-baseweb="radio"]:has(input:checked){background:#176f83;color:white;font-weight:600}
+.st-key-workspace_page label[data-baseweb="radio"]>div:first-child{display:none}
+.st-key-workspace_page label[data-baseweb="radio"]:focus-within{outline:2px solid #176f83;outline-offset:2px}
 </style>""", unsafe_allow_html=True)
 ROOT = Path(__file__).resolve().parent
 data_dir = Path(os.environ.get("SCREENER_DATA_DIR", str(ROOT / "data")))
 
+if st.session_state.get("requested_page"):
+    st.session_state.workspace_page = st.session_state.pop("requested_page")
 with st.sidebar:
-    st.title("📈 A股筛选")
+    st.title("📈 工作台")
+    page = st.radio("主菜单", ["今日概览", "股票筛选", "每日复盘", "自选跟踪"],
+                    key="workspace_page", label_visibility="collapsed")
+    st.divider()
     st.caption("本地工作台 · 手动刷新 · 可携带")
     demo = st.toggle("演示模式（不联网）", key="demo")
 
@@ -27,9 +38,6 @@ if demo:
     seed(store)
 svc = Service(store)
 st.title("工作台")
-if st.session_state.get("requested_page"):
-    st.session_state.workspace_page = st.session_state.pop("requested_page")
-page = st.radio("工作区", ["今日概览", "股票筛选", "每日复盘", "自选跟踪"], horizontal=True, key="workspace_page", label_visibility="collapsed")
 if page == "今日概览":
     from screener.overview_ui import render_overview
     render_overview(store, demo)

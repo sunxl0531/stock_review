@@ -171,6 +171,27 @@ def test_invalid_worker_count_is_rejected(tmp_path):
     with pytest.raises(ValueError, match="并发"):
         ReviewRunner(repo).create(config() | {"workers":20})
 
+
+@pytest.mark.parametrize("workers", [5, 10])
+def test_requested_workers_really_run_concurrently(tmp_path, workers):
+    barrier = threading.Barrier(workers)
+    class ManyStocks(FakeService):
+        def request(self, operation, **kwargs):
+            if operation == "directory":
+                return {"rows":[dict(code=f"600{i:03d}", name="测试", board="沪市主板",
+                                     listed=CAL[0]) for i in range(workers)]}
+            if operation == "history":
+                barrier.wait(timeout=10)
+                return history([20]*29+[30])
+            return super().request(operation, **kwargs)
+    repo = ReviewRepository(Store(tmp_path/"test.db"))
+    runner = ReviewRunner(repo, ManyStocks(), delay=0)
+    run = runner.create(config() | {"workers":workers})
+    runner.run(run["id"])
+    assert repo.get(run["id"])["status"] == "done"
+    assert len(repo.results(run["id"])) == workers
+    assert all(r["outcome"] == "match" for r in repo.results(run["id"]))
+
 def test_review_page_start_saved_chart_and_offline_navigation(tmp_path, monkeypatch):
     from pathlib import Path
     from streamlit.testing.v1 import AppTest

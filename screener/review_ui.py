@@ -24,7 +24,7 @@ def render_review(store, demo):
     st.subheader("每日复盘 · SNAKEA")
     st.write("站上 1～2 天直接入选；连续站上超过 2 天，仅在 SNAKEA 上行时入选。")
     st.caption("站上=日K收盘价严格大于同日SNAKEA；上行=最新一根SNAKEA高于前一根。按沪深主板、创业板、科创板、北交所分组。")
-    st.info("开始复盘会重新获取交易日历、股票目录和当天批量行情，再计算结果；腾讯历史日K滞后时，仅在收盘行情与前一日K线核对一致后补算，并标明数据依据。默认2路并发，支持停止及继续。")
+    st.info("开始复盘会重新获取交易日历、股票目录和当天批量行情，再计算结果；腾讯历史日K滞后时，仅在收盘行情与前一日K线核对一致后补算，并标明数据依据。默认5路并发，最多10路，支持停止及继续。")
     st.caption(f"本地数据库：{store.path}。迁移电脑时保留整个 data 文件夹即可。")
     if demo:
         st.caption("演示模式不发起复盘扫描。关闭左侧演示模式后可开始真实复盘。")
@@ -49,8 +49,8 @@ def review_panel(store, demo):
         fast_batch = st.checkbox("快速复盘：批量读取当日行情，本地计算初筛", value=True,
                                  key="review_fast_batch", disabled=bool(active) or source_name != "腾讯" or force_refresh)
         st.caption("快速模式适用于已有本地历史的股票。批量未入选项不逐只核对前复权，页面会标注数量；命中、价格接近SNAKEA或历史不足的股票仍单独获取日K。")
-        workers = st.selectbox("同时处理股票数", [1, 2, 3], index=1, key="review_workers", disabled=bool(active),
-                               help="默认2路。并发越高，接口拒绝或限流风险可能越高；所有请求仍受1秒启动间隔约束。")
+        workers = st.selectbox("并发请求线程数", list(range(1, 11)), index=4, key="review_workers", disabled=bool(active),
+                               help="默认5个，可选至10个；历史任务启动间隔0.1秒。接口限流时暂停并保留进度。")
         st.caption("同一来源、目标日期已有15:30后获取的日线时复用本地数据；盘中缓存仍更新。增量校验如发现前复权价格变化，会重新获取该股完整窗口。接口实际返回量和调用额度由数据源决定。")
         st.caption("复盘使用这里的条件，独立于股票筛选页；目标日日K缺失列为无法判定，无成交日K不入选。")
     if st.button("开始复盘", type="primary", disabled=demo or bool(active) or not boards, key="review_start"):
@@ -95,7 +95,7 @@ def review_panel(store, demo):
         st.warning(f"{cache_counts['batch']} 只未入选股票由批量当日行情和本地历史初筛，未逐只校验当天前复权价格；除权等情况可能使筛选结果变化。需要严格核验时，重新开始复盘并关闭“快速复盘”。")
     st.caption(f"开始：{run['created_at']} · 最近更新：{run['updated_at']}。每只股票独立请求，非同一时刻快照；收盘前日K可能变化。")
     saved = run["config"]
-    st.caption(f"并发股票数：{saved.get('workers', 1)} · 每只历史任务启动至少间隔1秒")
+    st.caption(f"并发线程数：{saved.get('workers', 1)} · 历史任务启动间隔0.1秒")
     st.caption(f"本记录来源：{'腾讯' if saved['source']=='tencent' else '东方财富'} · 排除ST：{'是' if saved.get('exclude_st') else '否'} · 排除上市不足60个交易日：{'是' if saved.get('exclude_new') else '否'}")
     if counts["unknown"] or counts["error"] or len(results) < total or not total:
         st.warning("本次仍有未处理、失败或无法判定的股票，当前符合列表不是完整市场结论。")

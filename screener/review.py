@@ -162,7 +162,7 @@ class ReviewRepository:
 
 
 class ReviewRunner:
-    def __init__(self, repo, service=None, delay=1):
+    def __init__(self, repo, service=None, delay=0.1):
         self.repo = repo
         self.service = service or Service(repo.store)
         self.delay = delay
@@ -174,8 +174,8 @@ class ReviewRunner:
             raise ValueError("请选择有效市场")
         if config["source"] not in ("tencent", "eastmoney"):
             raise ValueError("未知历史来源")
-        if config.get("workers", 1) not in (1, 2, 3):
-            raise ValueError("并发数只能是1、2或3")
+        if type(config.get("workers", 1)) is not int or not 1 <= config.get("workers", 1) <= 10:
+            raise ValueError("并发数必须是1至10的整数")
         run = dict(id=uuid.uuid4().hex, config=config, status="ready", stage=0,
                    created_at=now(), updated_at=now(), target=None, total=0,
                    processed=0, current="", error="")
