@@ -9,6 +9,7 @@ from .indicators import add_indicators, make_detail_chart
 from .review import ReviewRepository, ReviewRunner
 from .review_compare import comparable_previous, compare_reviews
 from .review_metrics import review_metrics
+from .review_export import review_excel
 from .store import now
 
 STATUS = {"ready":"待开始", "running":"扫描中", "paused":"已暂停", "done":"扫描完成", "partial":"存在请求失败"}
@@ -29,6 +30,11 @@ def render_review(store, demo):
     if demo:
         st.caption("演示模式不发起复盘扫描。关闭左侧演示模式后可开始真实复盘。")
     review_panel(store, demo)
+
+
+@st.cache_data(show_spinner=False, max_entries=3)
+def cached_review_excel(run, results):
+    return review_excel(run, results)
 
 
 @st.fragment(run_every=3)
@@ -95,6 +101,12 @@ def review_panel(store, demo):
     st.caption(f"本记录来源：{'腾讯' if saved['source']=='tencent' else '东方财富'} · 排除ST：{'是' if saved.get('exclude_st') else '否'} · 排除上市不足60个交易日：{'是' if saved.get('exclude_new') else '否'}")
     if counts["unknown"] or counts["error"] or len(results) < total or not total:
         st.warning("本次仍有未处理、失败或无法判定的股票，当前符合列表不是完整市场结论。")
+    if run['status'] in ('done', 'partial') and active != run_id:
+        st.download_button('导出个股明细 Excel', data=cached_review_excel(run, results),
+            file_name=f"每日复盘_{run.get('target') or saved['requested_date']}_{run_id[:8]}.xlsx",
+            mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            key='review_export:'+run_id, on_click='ignore')
+        st.caption('导出所选复盘记录：复盘概要、符合个股、全部明细（含未符合及无法判定原因）。')
     if changes:
         st.caption(f"与 {prior['target']} 复盘比较；两次均有明确结果才判定变化。扫描未完成时仅为暂时结果。")
         change_cols = st.columns(4)

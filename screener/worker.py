@@ -1,6 +1,7 @@
 """External requests only. This process can safely be terminated on timeout."""
 import json
 import sys
+from urllib.parse import urlsplit
 from datetime import date, datetime, timedelta
 from .provider import normalize_quotes, normalize_directory, normalize_history, parse_tencent, parse_tencent_daily_quotes
 
@@ -9,6 +10,14 @@ def install_transport_guard():
     # Some SDK functions omit timeout. Bound every requests transport call.
     original_send = requests.sessions.Session.send
     def bounded_send(self, request, **options):
+        # Public domestic market feeds can fail through system/environment proxies.
+        # Keep this override scoped to our data providers, without changing OS settings
+        # or disabling TLS verification for any request.
+        host = (urlsplit(request.url).hostname or '').lower()
+        direct_domains = ('sina.com.cn', 'sinajs.cn', 'gtimg.cn', 'finance.qq.com', 'sse.com.cn',
+                          'szse.cn', 'bse.cn', 'eastmoney.com')
+        if any(host == domain or host.endswith('.' + domain) for domain in direct_domains):
+            options['proxies'] = {}
         if options.get("timeout") is None:
             options["timeout"] = (8, 15)
         response = original_send(self, request, **options)

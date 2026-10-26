@@ -1,5 +1,25 @@
 from screener.provider import normalize_quotes, normalize_directory, normalize_history, parse_tencent
 
+def test_public_market_transport_ignores_broken_environment_proxy(monkeypatch):
+    import requests
+    from screener.worker import install_transport_guard
+    calls = []
+    def send(self, request, **options):
+        calls.append(options)
+        response = requests.Response()
+        response.status_code = 200
+        response._content = b'ok'
+        return response
+    monkeypatch.setattr(requests.sessions.Session, 'send', send)
+    install_transport_guard()
+    session = requests.Session()
+    for host in ('finance.sina.com.cn', 'query.sse.com.cn', 'qt.gtimg.cn', 'proxy.finance.qq.com', 'example.org'):
+        session.send(requests.Request('GET', 'https://' + host).prepare(),
+                     proxies={'https': 'http://127.0.0.1:9999'})
+    assert all(c['proxies'] == {} for c in calls[:4])
+    assert calls[4]['proxies'] == {'https': 'http://127.0.0.1:9999'}
+    assert all(c['timeout'] == (8, 15) for c in calls)
+
 def test_quote_units_and_missing_data():
     rows = normalize_quotes([{"代码": "000001", "名称": "平安银行", "最新价": "11.2", "涨跌幅": "2", "量比": "-", "成交额": "100000000"}])
     assert rows[0]["code"] == "000001"
