@@ -202,10 +202,13 @@ def test_review_page_start_saved_chart_and_offline_navigation(tmp_path, monkeypa
     monkeypatch.setattr(Provider, "call", forbidden)
     service = FakeService()
     def synchronous_start(self, run_id):
-        self.service = service
         self.delay = 0
         self.run(run_id)
     monkeypatch.setattr(ReviewRunner, "start", synchronous_start)
+    store = Store(tmp_path/"market.db")
+    store.put("calendar", {"days":CAL})
+    store.put("directory:沪市主板", {"rows":[dict(code="600001", name="测试", board="沪市主板", listed=CAL[0])]})
+    store.put("history:600001", history([20]*29+[30]))
     app = AppTest.from_file(str(Path(__file__).resolve().parents[1]/"app.py")).run(timeout=20)
     app.radio(key="workspace_page").set_value("每日复盘").run()
     assert not app.exception
@@ -214,7 +217,7 @@ def test_review_page_start_saved_chart_and_offline_navigation(tmp_path, monkeypa
     app.date_input(key="review_date").set_value(date.fromisoformat(DAY))
     app.button(key="review_start").click().run(timeout=20)
     assert not app.exception
-    assert any(op == "history" for op, _ in service.calls)
+    assert not service.calls
     run_id = app.selectbox(key="review_run").value
     app.session_state["review_selected:"+run_id] = "600001"
     calls = len(service.calls)

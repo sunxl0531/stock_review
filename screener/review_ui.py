@@ -24,7 +24,7 @@ def render_review(store, demo):
     st.subheader("每日复盘 · SNAKEA")
     st.write("站上 1～2 天直接入选；连续站上超过 2 天，仅在 SNAKEA 上行时入选。")
     st.caption("站上=日K收盘价严格大于同日SNAKEA；上行=最新一根SNAKEA高于前一根。按沪深主板、创业板、科创板、北交所分组。")
-    st.info("开始复盘会重新获取交易日历、股票目录和当天批量行情，再计算结果；腾讯历史日K滞后时，仅在收盘行情与前一日K线核对一致后补算，并标明数据依据。默认5路并发，最多10路，支持停止及继续。")
+    st.info("复盘只使用本地日K，不重复请求全市场数据。请先在今日概览更新数据；缺失目标日K会列为无法判定。")
     st.caption(f"本地数据库：{store.path}。迁移电脑时保留整个 data 文件夹即可。")
     if demo:
         st.caption("演示模式不发起复盘扫描。关闭左侧演示模式后可开始真实复盘。")
@@ -45,19 +45,15 @@ def review_panel(store, demo):
         a,b = st.columns(2)
         exclude_st = a.checkbox("复盘排除 ST / *ST", value=True, key="review_exclude_st", disabled=bool(active))
         exclude_new = b.checkbox("复盘排除上市不足60个交易日", value=True, key="review_exclude_new", disabled=bool(active))
-        force_refresh = st.checkbox("重新获取已有收盘缓存（默认直接复用）", key="review_force_refresh", disabled=bool(active))
-        fast_batch = st.checkbox("快速复盘：批量读取当日行情，本地计算初筛", value=True,
-                                 key="review_fast_batch", disabled=bool(active) or source_name != "腾讯" or force_refresh)
-        st.caption("快速模式适用于已有本地历史的股票。批量未入选项不逐只核对前复权，页面会标注数量；命中、价格接近SNAKEA或历史不足的股票仍单独获取日K。")
-        workers = st.selectbox("并发请求线程数", list(range(1, 11)), index=4, key="review_workers", disabled=bool(active),
-                               help="默认5个，可选至10个；历史任务启动间隔0.1秒。接口限流时暂停并保留进度。")
-        st.caption("同一来源、目标日期已有15:30后获取的日线时复用本地数据；盘中缓存仍更新。增量校验如发现前复权价格变化，会重新获取该股完整窗口。接口实际返回量和调用额度由数据源决定。")
-        st.caption("复盘使用这里的条件，独立于股票筛选页；目标日日K缺失列为无法判定，无成交日K不入选。")
+        force_refresh = False
+        fast_batch = False
+        workers = 5
+        st.caption("开始后按本地日K计算，行业信息来自本地目录。数据不足请到今日概览获取。")
     if st.button("开始复盘", type="primary", disabled=demo or bool(active) or not boards, key="review_start"):
         try:
             run = runner.create(dict(boards=boards, source="tencent" if source_name == "腾讯" else "eastmoney",
                                      requested_date=selected_date.isoformat(), exclude_st=exclude_st, exclude_new=exclude_new,
-                                     force_refresh=force_refresh, workers=workers,
+                                     force_refresh=force_refresh, workers=workers, local_only=True,
                                      fast_batch=fast_batch and source_name == "腾讯" and not force_refresh))
             runner.start(run["id"])
             st.session_state.review_run = run["id"]
@@ -95,7 +91,7 @@ def review_panel(store, demo):
         st.warning(f"{cache_counts['batch']} 只未入选股票由批量当日行情和本地历史初筛，未逐只校验当天前复权价格；除权等情况可能使筛选结果变化。需要严格核验时，重新开始复盘并关闭“快速复盘”。")
     st.caption(f"开始：{run['created_at']} · 最近更新：{run['updated_at']}。每只股票独立请求，非同一时刻快照；收盘前日K可能变化。")
     saved = run["config"]
-    st.caption(f"并发线程数：{saved.get('workers', 1)} · 历史任务启动间隔0.1秒")
+    st.caption("本记录使用本地缓存计算" if saved.get("local_only") else "旧版联网复盘记录")
     st.caption(f"本记录来源：{'腾讯' if saved['source']=='tencent' else '东方财富'} · 排除ST：{'是' if saved.get('exclude_st') else '否'} · 排除上市不足60个交易日：{'是' if saved.get('exclude_new') else '否'}")
     if counts["unknown"] or counts["error"] or len(results) < total or not total:
         st.warning("本次仍有未处理、失败或无法判定的股票，当前符合列表不是完整市场结论。")
@@ -116,6 +112,7 @@ def review_panel(store, demo):
             try:
                 # Speed controls may be changed when continuing an existing scan.
                 # Keep its date, source and screening exclusions frozen.
+                run["config"]["local_only"] = True
                 run["config"]["workers"] = workers
                 run["config"]["fast_batch"] = fast_batch and run["config"]["source"] == "tencent" and not run["config"].get("force_refresh", False)
                 repo.save(run)
@@ -188,10 +185,9 @@ def review_panel(store, demo):
             duration = ("至少" if result.get("above_days_at_least") else "") + str(result["above_days"])
             st.caption(f"连续站上 {duration} 天 · 突破日期 {result['break_date'] or '早于可确认区间'} · SNAKEA {result['snakea_direction']} · 日线截至 {chart_target}")
             bars = [b for b in result["history"]["bars"] if b["date"] <= chart_target]
-            show_stop = st.checkbox("显示停损下限", value=True, key=f"review_stop:{run_id}:{selected_code}")
-            st.plotly_chart(make_detail_chart(add_indicators(bars), show_stop=show_stop), use_container_width=True,
-                            key=f"review_chart:{run_id}:{selected_code}")
-            st.caption("展示本次复盘保存的前复权日K快照，含MA5／MA10／MA20、SNAKEA、停损下限及趋势线；红绿线仅按公式绘制。")
+            from .detail_ui import render_detail
+            render_detail(result["history"] | {"bars":bars}, f"review_detail:{run_id}:{selected_code}")
+
     with st.expander("无法判定、失败及排除原因"):
         other = [r for r in results if r["outcome"] in ("unknown","error","excluded")]
         st.dataframe(pd.DataFrame(other).reindex(columns=["code","name","board","reason"]).rename(

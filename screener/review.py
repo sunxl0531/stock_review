@@ -230,6 +230,8 @@ class ReviewRunner:
         return True
 
     def _execute(self, run, owner):
+        if run["config"].get("local_only"):
+            return self._execute_local(run, owner)
         cfg = run["config"]
         groups = [b for b in ("沪市主板","科创板","深圳","北交所")
                   if b in cfg["boards"] or (b == "深圳" and set(cfg["boards"]) & {"深市主板","创业板"})]
@@ -327,6 +329,46 @@ class ReviewRunner:
             return
         run.update(status="partial" if any(r["outcome"] == "error" for r in previous.values()) else "done",
                    current="", finished_at=now(), processed=len(previous))
+        self.repo.save(run)
+
+    def _execute_local(self, run, owner):
+        cfg = run["config"]
+        calendar = sorted(set(self.repo.store.get("calendar", {}).get("days", [])))
+        days = [d for d in calendar if d <= cfg["requested_date"]]
+        if not days or calendar[-1] < cfg["requested_date"]:
+            raise ValueError("本地交易日历覆盖不足，请先到今日概览获取所有数据")
+        target = days[-1]
+        stocks = [r for r in self.service.directory() if r.get("board") in cfg["boards"]]
+        if not stocks:
+            raise ValueError("本地股票目录为空，请先到今日概览获取所有数据")
+        daily = self.repo.store.get("market:daily", {}).get("rows", {})
+        run.update(target=target, total=len(stocks), processed=0)
+        self.repo.save(run)
+        for stock in stocks:
+            if not self.checkpoint(run, owner):
+                return
+            try:
+                result = self.exclusion(stock, calendar, target, cfg)
+                if result is None:
+                    history = self.repo.store.get("history:"+stock["code"]) or {}
+                    records = [b for b in history.get("bars", []) if b.get("date", "") <= target]
+                    history = history | {"bars":records, "basis_date":records[-1]["date"] if records else None}
+                    if history.get("basis_date") != target and cfg["source"] == "tencent":
+                        history = closed_quote_history(history, daily.get(stock["code"]), calendar, target) or history
+                    result = review_signal(history, calendar, target)
+                    if history.get("verification"):
+                        result["verification"] = history["verification"]
+                    result.update(cache_mode=history.get("cache_mode") if history.get("verification") else "local", data_fetched_at=history.get("fetched_at"))
+                    if result["outcome"] in ("match", "no_match"):
+                        result.update(review_metrics(result | {"history":history}))
+                    if result["outcome"] == "match":
+                        result["history"] = history
+            except (ValueError, TypeError, KeyError) as exc:
+                result = {"outcome":"error", "reason":"本地历史异常："+str(exc)[:200]}
+            self.repo.put_result(run["id"], stock | result | {"fetched_at":now()})
+            run.update(processed=run["processed"]+1, current=stock["code"])
+            self.repo.save(run)
+        run.update(status="done", current="", finished_at=now())
         self.repo.save(run)
 
     def _request_history(self, operation, **kwargs):

@@ -44,7 +44,7 @@ class Service:
             self.store.put("quotes", data | {"fetched_at": now()})
             return len(rows)
 
-    def refresh_watchlist_quotes(self, codes):
+    def refresh_watchlist_quotes(self, codes, preserve_other=False):
         from .history import history_symbol
         selected = sorted(set(codes))
         if not selected:
@@ -56,7 +56,7 @@ class Service:
             if any(r["code"] not in selected for r in data["rows"]):
                 raise ValueError("自选行情返回了未请求的股票，旧缓存已保留")
             stamp = now()
-            old = {r["code"]:r for r in self.store.get("watch_quotes", {}).get("rows", []) if r["code"] in selected}
+            old = {r["code"]:r for r in self.store.get("watch_quotes", {}).get("rows", []) if preserve_other or r["code"] in selected}
             old.update({r["code"]:r | {"fetched_at":stamp} for r in data["rows"]})
             self.store.put("watch_quotes", {"rows":[old[c] for c in sorted(old)],
                                             "source":data.get("source", "腾讯公开行情"), "fetched_at":stamp})

@@ -66,7 +66,6 @@ def selected_watch_code(rows, selected_indices, previous_code):
 
 
 def render_watchlist(store, demo):
-    st.subheader("自选股跟踪")
     st.caption("打开本页只读本地数据；点击刷新按钮后才请求自选股行情和日K。")
     codes = store.watchlist()
     if not codes:
@@ -75,7 +74,7 @@ def render_watchlist(store, demo):
     update_daily = st.checkbox("同时更新所有自选股日K", value=True, key="watch_update_daily",
                                help="每只股票通常至少2次历史接口请求；关闭后只批量刷新最新报价。")
     st.caption(f"本次将批量请求 {len(codes)} 只自选股报价" + (f"，并逐只更新日K（通常至少{2*len(codes)}次历史请求）" if update_daily else ""))
-    if st.button("刷新全部自选股行情", type="primary", disabled=demo, key="watch_refresh_all"):
+    if st.button("刷新全部自选股的行情", type="primary", disabled=demo, key="watch_refresh_all"):
         service = Service(store)
         try:
             quote_count = service.refresh_watchlist_quotes(codes)
@@ -125,36 +124,42 @@ def render_watchlist(store, demo):
         st.caption(f"最近复盘：{target} · {latest['status']} · {latest.get('processed',0)} / {latest.get('total') or '待加载'}。未完成时变化仅供暂时查看。")
     else:
         st.info("尚无复盘记录；自选股票仍可查看已有历史K线。")
+    latest_quotes = {r["code"]:r for r in store.get("quotes", {}).get("rows", [])}
+    for quote in watch_snapshot.get("rows", []):
+        old = latest_quotes.get(quote["code"], {})
+        if (quote.get("quote_time") or quote.get("quote_date") or "") >= (old.get("quote_time") or old.get("quote_date") or ""):
+            latest_quotes[quote["code"]] = quote
     histories = {code:store.get("history:"+code) for code in codes}
     rows = build_watch_rows(codes, Service(store).directory(), results, target, changes,
-                            quotes=watch_snapshot.get("rows", []), histories=histories)
-    st.caption("点击表格行，下方切换到该股K线。")
+                            quotes=list(latest_quotes.values()), histories=histories)
+    from .workspace import search_stocks
+    query = st.text_input("搜索自选股代码或名称", key="watch_search", placeholder="例如：三花 或 002050")
+    visible = {r["code"] for r in search_stocks([{"code":r["代码"], "name":r["名称"]} for r in rows], query)}
+    rows = [r for r in rows if r["代码"] in visible]
+    if not rows:
+        st.info("自选股中没有匹配结果。全市场搜索请使用左侧个股筛选。")
+        return
+    codes = [r["代码"] for r in rows]
+    st.caption("点击表格行，下方切换到该股信息和K线。")
     event = st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True,
-                         on_select="rerun", selection_mode="single-row", key="watch_table")
+                         on_select="rerun", selection_mode="single-row", key="watch_table:"+query)
     selected, remembered = selected_watch_code(rows, list(event.selection.rows),
                                                st.session_state.get("watch_table_selection"))
     st.session_state.watch_table_selection = remembered
     if selected:
         st.session_state.watch_detail = selected
+    if st.session_state.get("watch_detail") not in codes:
+        st.session_state.watch_detail = codes[0]
     choice = st.selectbox("查看自选股票", codes, format_func=lambda c:c+" · "+next(
         (r["名称"] for r in rows if r["代码"] == c), ""), key="watch_detail")
     left, right = st.columns(2)
     if left.button("移出自选", key="watch_remove"):
-        store.set_watchlist([c for c in codes if c != choice])
+        store.set_watchlist([c for c in store.watchlist() if c != choice])
         st.rerun()
-    quoted = {r["code"] for r in store.get("quotes", {}).get("rows", [])}
-    if right.button("转到个股详情", key="watch_open_detail", disabled=choice not in quoted):
-        st.session_state.detail_stock = choice
-        st.session_state.requested_page = "股票筛选"
-        st.rerun()
-    if choice not in quoted:
-        st.caption("当前行情缓存尚未包含该股；可在本页查看历史，刷新行情后再转到个股详情。")
-    history = store.get("history:"+choice)
-    if history and history.get("bars"):
-        try:
-            st.plotly_chart(make_detail_chart(add_indicators(history["bars"])), use_container_width=True)
-            st.caption(f"本地前复权日K · 历史基准日 {history.get('basis_date', '未知')}。本页不会更新数据。")
-        except (ValueError, TypeError, KeyError) as exc:
-            st.warning(f"历史缓存无法绘图：{exc}")
-    else:
-        st.info("该股尚无本地历史；可到个股详情手动获取。")
+    row = next(r for r in rows if r["代码"] == choice)
+    st.subheader(f"{choice} · {row['名称']}")
+    cols = st.columns(3)
+    for col, label in zip(cols, ("最新价", "涨跌幅 %", "行情时间")):
+        col.metric(label, row.get(label) if row.get(label) is not None else "未获取")
+    from .detail_ui import render_detail
+    render_detail(store.get("history:"+choice), "watch")

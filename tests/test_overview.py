@@ -13,7 +13,7 @@ def test_empty_overview_is_local_and_links_to_review(tmp_path, monkeypatch):
     app = AppTest.from_file(APP).run(timeout=20)
     assert not app.exception
     assert app.radio(key="workspace_page").value == "今日概览"
-    assert any("尚无复盘" in item.value for item in app.info)
+    assert any("暂无本地数据" in item.value for item in app.info)
     app.button(key="overview_view_review").click().run()
     assert not app.exception
     assert app.radio(key="workspace_page").value == "每日复盘"
@@ -30,7 +30,9 @@ def test_overview_shows_saved_progress_without_network(tmp_path, monkeypatch):
     monkeypatch.setattr(Provider, "call", lambda *a, **k: (_ for _ in ()).throw(AssertionError("联网")))
     app = AppTest.from_file(APP).run(timeout=20)
     assert not app.exception
-    assert any("25 / 100" in item.value for item in app.markdown)
+    app.button(key="overview_view_review").click().run()
+    assert any("0 / 100" in item.proto.text for item in app.get("progress"))
+    assert any("仍有未处理" in item.value for item in app.warning)
 
 
 def test_stale_running_review_can_resume(tmp_path, monkeypatch):
@@ -43,7 +45,8 @@ def test_stale_running_review_can_resume(tmp_path, monkeypatch):
                   "exclude_st":True,"exclude_new":True}})
     app = AppTest.from_file(APP).run(timeout=20)
     assert not app.exception
-    assert not app.button(key="overview_resume").disabled
+    app.button(key="overview_view_review").click().run()
+    assert not app.button(key="review_resume").disabled
 
 
 def test_saved_review_and_watchlist_navigation_stay_offline(tmp_path, monkeypatch):
@@ -70,4 +73,5 @@ def test_saved_review_and_watchlist_navigation_stay_offline(tmp_path, monkeypatc
     assert not app.exception
     app.radio(key="workspace_page").set_value("自选跟踪").run()
     assert not app.exception
-    assert any("自选股跟踪" in h.value for h in app.subheader)
+    assert app.selectbox(key="watch_detail").value == "600001"
+    assert not any("自选股跟踪" in h.value for h in app.subheader)

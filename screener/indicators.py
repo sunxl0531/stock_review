@@ -36,6 +36,15 @@ def add_indicators(records):
     df.loc[df.close <= 0, "close"] = np.nan
     for period in (5, 10, 20):
         df[f"MA{period}"] = df.close.rolling(period, min_periods=period).mean()
+    # Restart recursive MACD at gaps; calculate before cropping the chart.
+    df["DIF"] = np.nan
+    df["DEA"] = np.nan
+    for _, segment in df.groupby(df.close.isna().cumsum()):
+        valid = segment.close.dropna()
+        dif = valid.ewm(span=12, adjust=False).mean() - valid.ewm(span=26, adjust=False).mean()
+        df.loc[valid.index, "DIF"] = dif
+        df.loc[valid.index, "DEA"] = dif.ewm(span=9, adjust=False).mean()
+    df["MACD"] = 2 * (df.DIF - df.DEA)
     df["B2"] = triple_sma(df.close)
     df["SNAKEA"] = df.B2.rolling(13, min_periods=13).max()
     df["stop_sma2"] = df.B2.rolling(3, min_periods=3).mean()
@@ -76,7 +85,7 @@ def assess_trend(df):
                     "偏防守":"空头排列、价格位于MA5之下，MA20与近期趋势同向下行。",
                     "震荡观察":"多空条件尚未一致，暂不归入进攻或防守状态。"}[state]}
 
-def make_detail_chart(df, display_bars=120, show_ma=True, show_trend=True, show_snakea=True, show_stop=True):
+def make_detail_chart(df, display_bars=120, show_ma=True, show_trend=True, show_snakea=True, show_stop=True, panel="成交量"):
     shown = df.tail(display_bars) if display_bars else df
     chart = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=.07, row_heights=[.77,.23])
     chart.add_trace(go.Candlestick(x=shown.date, open=shown.open, high=shown.high, low=shown.low, close=shown.close,
@@ -100,11 +109,21 @@ def make_detail_chart(df, display_bars=120, show_ma=True, show_trend=True, show_
         chart.add_trace(go.Scatter(x=shown.date,y=shown.trend,mode="lines",name="近20根趋势线",
                         line=dict(color="#202c3f",width=2,dash="dash"),connectgaps=False,
                         hovertemplate="拟合趋势 %{y:.2f}<extra></extra>"),row=1,col=1)
-    chart.add_trace(go.Bar(x=shown.date,y=shown.volume,name="成交量（手）",showlegend=False,
-                    marker_color=["#e1a1a1" if c>=o else "#82b9ac" for c,o in zip(shown.close,shown.open)]),row=2,col=1)
+    if panel == "MACD":
+        chart.add_trace(go.Bar(x=shown.date, y=shown.MACD, name="MACD",
+            marker_color=["#df4949" if v >= 0 else "#14856a" for v in shown.MACD]), row=2, col=1)
+        for name, color in (("DIF", "#e9a320"), ("DEA", "#5274db")):
+            chart.add_trace(go.Scatter(x=shown.date, y=shown[name], name=name,
+                mode="lines", connectgaps=False, line=dict(color=color, width=1.6)), row=2, col=1)
+        chart.add_hline(y=0, line_width=1, line_color="#b0bac8", row=2, col=1)
+    elif panel == "成交量":
+        chart.add_trace(go.Bar(x=shown.date,y=shown.volume,name="成交量（手）",showlegend=False,
+            marker_color=["#e1a1a1" if c>=o else "#82b9ac" for c,o in zip(shown.close,shown.open)]),row=2,col=1)
+    else:
+        raise ValueError("未知副图")
     chart.update_layout(height=560,margin=dict(l=10,r=10,t=45,b=10),xaxis_rangeslider_visible=False,
                         hovermode="x unified",legend=dict(orientation="h",y=1.07,x=0))
     chart.update_xaxes(type="category",categoryorder="array",categoryarray=shown.date.tolist(),nticks=10)
     chart.update_yaxes(title_text="价格（元）",row=1,col=1)
-    chart.update_yaxes(title_text="成交量（手）",row=2,col=1)
+    chart.update_yaxes(title_text="MACD (12,26,9)" if panel == "MACD" else "成交量（手）",row=2,col=1)
     return chart
